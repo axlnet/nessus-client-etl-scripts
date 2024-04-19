@@ -4,6 +4,13 @@ import requests
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 import pymysql.cursors
 import os
+import boto3
+from botocore.exceptions import ClientError
+import datadog
+import json
+from datetime import datetime
+import uuid
+import hashlib
 
 # Disable SSL warnings
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
@@ -11,18 +18,18 @@ requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 # Read configuration
 config = configparser.ConfigParser()
 config.read(os.path.join(os.path.dirname(__file__), 'config.ini'))
-
+# Nessus config vars
 nessus_hostname = config.get('nessus','hostname')
 nessus_port = config.get('nessus','port')
 access_key = 'accessKey=' + config.get('nessus','access_key') + ';'
 secret_key = 'secretKey=' + config.get('nessus','secret_key') + ';'
 base = 'https://{hostname}:{port}'.format(hostname=nessus_hostname, port=nessus_port)
 trash = config.getboolean('nessus','trash')
-
-db_hostname = config.get('mysql','hostname')
-username = config.get('mysql','username')
-password = config.get('mysql','password')
-database = config.get('mysql','database')
+# AWS config vars
+aws_nessus_scanner_user_id = config.get('aws', 'aws_nessus_scanner_user_id')
+aws_nessus_scanner_user_secret = config.get('aws', 'aws_nessus_scanner_user_secret')
+aws_region = config.get('aws', 'aws_region')
+aws_s3_bucket_name = config.get('aws', 'aws_s3_bucket_name')
 
 # Nessus endpoints
 FOLDERS = '/folders'
@@ -36,16 +43,50 @@ SCAN_RUN = SCAN_ID + '?history_id={history_id}'
 HOST_VULN = HOST_ID + '?history_id={history_id}'
 PLUGIN_OUTPUT = PLUGIN_ID + '?history_id={history_id}'
 
-# Database connection
-connection = pymysql.connect(host=db_hostname,
-                             user=username,
-                             password=password,
-                             db=database,
-                             charset='utf8mb4',
-                             cursorclass=pymysql.cursors.DictCursor,
-                             autocommit=False)
-
 # ---Functions---
+# Utils
+def get_unique_system_id():
+    # Get the MAC address
+    mac = uuid.getnode()
+    # Convert MAC address to a consistent format
+    mac_string = ':'.join(('%012X' % mac)[i:i+2] for i in range(0, 12, 2))
+    # Hash the MAC address to get a unique, consistent ID
+    unique_id = hashlib.sha256(mac_string.encode()).hexdigest()
+    return unique_id
+SYSTEM_ID = get_unique_system_id()
+# S3 Functions
+s3_client = boto3.client(
+    's3',
+    aws_access_key_id=aws_nessus_scanner_user_id,
+    aws_secret_access_key=aws_nessus_scanner_user_secret,
+    region_name=aws_region
+)
+
+def current_date_folder_name():
+    current_date = datetime.now()
+    # Format date as YYYYMMDD
+    return current_date.strftime('%Y%m%d')
+
+def upload_data_to_s3(data, file_type):
+    """Upload a file to an S3 bucket
+
+    :param file_name: File to upload
+    :param bucket: Bucket to upload to
+    :param object_name: S3 object name. If not specified then file_name is used
+    :return: True if file was uploaded, else False
+    """
+    file_name = f"{SYSTEM_ID}/{current_date_folder_name()}/{file_type}.json"
+    # Upload the file
+    s3_client = boto3.client('s3')
+    try:
+        # Convert to json
+        json_data = json.dumps(data)
+        s3_client.put_object(Body=json_data, Bucket=aws_s3_bucket_name, Key=file_name)
+    except ClientError as e:
+        return False
+        # TODO: LOG THIS WITH DATADOG!!!
+    return True
+
 # Nessus API functions
 def request(url):
     url = base + url
@@ -74,100 +115,36 @@ def get_plugin_output(scan_id, host_id, plugin_id, history_id):
 # Nessus export functions
 def update_folders():
     folders = get_folders()
-    with connection.cursor() as cursor:
-        # Upsert folders
-        for folder in folders['folders']:
-            sql = "INSERT INTO `folder` (`folder_id`, `type`, `name`)\
-                    VALUES (%s, %s, %s)\
-                    ON DUPLICATE KEY UPDATE type=%s, name=%s"
-            cursor.execute(sql, (folder['id'], folder['type'], folder['name'], folder['type'], folder['name']))
-    connection.commit()
+    upload_data_to_s3(folders, 'folder')
 
-def update_plugin(plugin, cursor):
-    # Check existing plugin_id in plugin DB
-    sql = "SELECT `plugin_id`, `mod_date` FROM `plugin` WHERE `plugin_id` = %s"
-    cursor.execute(sql, (plugin['pluginid']))
-    result = cursor.fetchone()
-
+def format_plugin(plugin):
     # Split references array into string delimited by new line
     reference = None
     if plugin['pluginattributes'].get('see_also', None) != None:
         reference = '\n'.join(plugin['pluginattributes'].get('see_also', None))
+    plugin['ref'] = reference
+    return plugin
 
-    if result != None:
-        if result['mod_date'] != plugin['pluginattributes']['plugin_information'].get('plugin_modification_date', None):
-            # New version of plugin exists, build update query
-            sql = "UPDATE `plugin` \
-            SET `severity` = %s, `name` = %s, `family` = %s, `synopsis` = %s, `description` = %s, `solution` = %s,\
-            `cvss_base_score` = %s, `cvss3_base_score` = %s, `cvss_vector` = %s, `cvss3_vector` = %s, `ref` = %s, `pub_date` = %s, `mod_date` = %s\
-            WHERE `plugin_id` = %s"
-
-            cursor.execute(sql, (
-            plugin['severity'], 
-            plugin['pluginname'], 
-            plugin['pluginfamily'],
-            plugin['pluginattributes']['synopsis'],
-            plugin['pluginattributes']['description'],
-            plugin['pluginattributes']['solution'],
-            plugin['pluginattributes']['risk_information'].get('cvss_base_score', None),
-            plugin['pluginattributes']['risk_information'].get('cvss3_base_score', None),
-            plugin['pluginattributes']['risk_information'].get('cvss_vector', None),
-            plugin['pluginattributes']['risk_information'].get('cvss3_vector', None),
-            reference,
-            plugin['pluginattributes']['plugin_information'].get('plugin_publication_date', None),
-            plugin['pluginattributes']['plugin_information'].get('plugin_modification_date', None),
-            plugin['pluginid']
-            ))
-
-        else:
-            # Looks like the plugin version is the same skipping
-            return None
-
-    else:
-        # Doesn't exist, build insert query
-        sql = "INSERT INTO `plugin` (`plugin_id`, `severity`, `name`, `family`, `synopsis`, `description`, `solution`,\
-            `cvss_base_score`, `cvss3_base_score`, `cvss_vector`, `cvss3_vector`, `ref`, `pub_date`, `mod_date`)\
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
-
-        cursor.execute(sql, (
-        plugin['pluginid'], 
-        plugin['severity'], 
-        plugin['pluginname'], 
-        plugin['pluginfamily'],
-        plugin['pluginattributes']['synopsis'],
-        plugin['pluginattributes']['description'],
-        plugin['pluginattributes']['solution'],
-        plugin['pluginattributes']['risk_information'].get('cvss_base_score', None),
-        plugin['pluginattributes']['risk_information'].get('cvss3_base_score', None),
-        plugin['pluginattributes']['risk_information'].get('cvss_vector', None),
-        plugin['pluginattributes']['risk_information'].get('cvss3_vector', None),
-        reference,
-        plugin['pluginattributes']['plugin_information'].get('plugin_publication_date', None),
-        plugin['pluginattributes']['plugin_information'].get('plugin_modification_date', None)
-        ))
-
-def insert_vuln_output(vuln_output, host_vuln_id, cursor):
+def format_vuln_outputs(vuln_output):
+    outputs = []
     for output in vuln_output:
         for port in output['ports'].keys():
-            sql = "INSERT INTO `vuln_output` (`host_vuln_id`, `port`, `output`)\
-                    VALUES (%s, %s, %s)"
-            cursor.execute(sql, (host_vuln_id, port, output['plugin_output']))
+            outputs.insert({'port': port, 'output': output['plugin_output']})
+    return outputs
 
-def insert_host_vuln(scan_id, host_id, plugin_id, history_id, cursor):
+def format_host_vuln(scan_id, host_id, plugin_id, history_id, cursor):
     # Need to insert plugin first to have FK relationship
     # Get vuln output which includes plugin info
     vuln_output = get_plugin_output(scan_id, host_id, plugin_id, history_id)
-    update_plugin(vuln_output['info']['plugindescription'], cursor)
+    plugin = format_plugin(vuln_output['info']['plugindescription'], plugin_id)
 
     # Insert host vuln
-    sql = "INSERT INTO `host_vuln` (`nessus_host_id`, `scan_run_id`, `plugin_id`)\
-            VALUES (%s, %s, %s)"
-    cursor.execute(sql, (host_id, history_id, plugin_id))
+    host_vuln = {'nessus_host_id': host_id, 'scan_run_id': history_id, 'plugin_id': plugin_id}
+    # Finally format vuln output and upload
+    outputs = format_vuln_outputs(vuln_output['outputs'])
+    return {'plugin': plugin, 'host_vuln': host_vuln, outputs: 'outputs'}
 
-    # Finally insert vuln output
-    insert_vuln_output(vuln_output['outputs'], cursor.lastrowid, cursor)
-
-def insert_host(scan_id, host_id, history_id, cursor):
+def format_host(scan_id, host_id, history_id):
     # Get host vulnerabilities for a scan run
     host = get_host_vuln(scan_id, host_id, history_id) 
 
@@ -176,27 +153,21 @@ def insert_host(scan_id, host_id, history_id, cursor):
     sev_count = [0] * 5
     for vuln in host['vulnerabilities']:
         sev_count[vuln['severity']] += vuln['count']
+
+    host['host_id'] = host_id
+    host['history_id'] = history_id
+    host['scan_id'] = scan_id
+    host['critical_count'] = sev_count[4]
+    host['high_count'] = sev_count[3]
+    host['medium_count'] = sev_count[2]
+    host['low_count'] = sev_count[1]
+    host['info_count'] = sev_count[0]
+
+    # Format host vulnerabilities
+    for i in range(len(host['vulnerabilities'])):
+        host['vulnerabilities'][i] = format_host_vuln(scan_id, host_id, host['vulnerabilities'][i]['plugin_id'], history_id)
     
-    # Insert host information
-    sql = "INSERT INTO `host` (`nessus_host_id`, `scan_run_id`, `scan_id`, `host_ip`, `host_fqdn`, `host_start`, `host_end`, `os`,\
-        `critical_count`, `high_count`, `medium_count`, `low_count`, `info_count`)\
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
-
-    cursor.execute(sql, (
-        host_id, 
-        history_id, 
-        scan_id, 
-        host['info']['host-ip'], 
-        host['info'].get('host-fqdn', None), 
-        host['info'].get('host_start', None), 
-        host['info'].get('host_end', None), 
-        host['info'].get('operating-system', None),
-        sev_count[4], sev_count[3], sev_count[2], sev_count[1], sev_count[0]
-        ))
-
-    # Insert host vulnerabilities
-    for vuln in host['vulnerabilities']:
-        insert_host_vuln(scan_id, host_id, vuln['plugin_id'], history_id, cursor)
+    return host
 
 def insert_scan_run(scan_id, history_id):
     # Get scan runs for a scan
@@ -208,47 +179,31 @@ def insert_scan_run(scan_id, history_id):
     for vuln in scan_run['vulnerabilities']:
         sev_count[vuln['severity']] += vuln['count']
 
-    with connection.cursor() as cursor:
-        # Insert scan run details
-        sql = "INSERT INTO `scan_run` (`scan_run_id`, `scan_id`, `scan_start`,`scan_end`, `targets`, `host_count`,\
-            `critical_count`, `high_count`, `medium_count`, `low_count`, `info_count`)\
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
-        
-        cursor.execute(sql, (
-            history_id, 
-            scan_id, 
-            scan_run['info']['scanner_start'], 
-            scan_run['info']['scanner_end'],
-            scan_run['info']['targets'], 
-            scan_run['info']['hostcount'],
-            sev_count[4], sev_count[3], sev_count[2], sev_count[1], sev_count[0]
-            ))
-        
-        # Insert hosts in scan run
-        for host in scan_run['hosts']:
-            insert_host(scan_id, host['host_id'], history_id, cursor)
+    scan_summary = {
+        'history_id': history_id,
+        'scan_id': scan_id,
+        'scanner_start': scan_run['info']['scanner_start'],
+        'scanner_end': scan_run['info']['scanner_end'],
+        'targets': scan_run['info']['targets'],
+        'host_count': scan_run['info']['hostcount'],
+        'critical_count': sev_count[4],
+        'high_count': sev_count[3],
+        'medium_count': sev_count[2],
+        'low_count': sev_count[1],
+        'info_count': sev_count[0],
+    }
 
-    connection.commit()
+    # Format hosts in scan run
+    for i in range(len(scan_run['hosts'])):
+        scan_run['hosts'][i] = format_host(scan_id, scan_run['hosts'][i]['host_id'], history_id)
+
+    upload_data_to_s3(scan_summary, 'scan_run')
+
+    
 
 def update_scans():
     scans = get_scans()
-    with connection.cursor() as cursor:
-        # Upsert scans
-        for scan in scans['scans']:
-            sql = "INSERT INTO `scan` (`scan_id`, `folder_id`, `type`, `name`)\
-                    VALUES (%s, %s, %s, %s)\
-                    ON DUPLICATE KEY UPDATE folder_id=%s, type=%s, name=%s"
-            cursor.execute(sql, (
-                scan['id'], 
-                scan['folder_id'], 
-                scan['type'], 
-                scan['name'], 
-                scan['folder_id'], 
-                scan['type'], 
-                scan['name']
-                ))
-    
-    connection.commit()
+    upload_data_to_s3(scans, 'scan')
 
     for scan in scans['scans']:
         print ('Processing: ' + scan['name'])
@@ -261,7 +216,8 @@ def update_scans():
             for scan_run in scan_details['history']:
                 # Only import if scan finished completely
                 if scan_run['status'] == 'completed':
-                    
+                    """
+                    # TODO: We probably wanna add this back in once we get rolling
                     result = None
                     with connection.cursor() as cursor:    
                         sql = "SELECT * FROM `scan_run` WHERE `scan_run_id` = %s"
@@ -270,8 +226,9 @@ def update_scans():
 
                     # If scan run hasn't yet been inserted
                     if result == None:
-                        print ('Inserting scan run: ' + str(scan_run['history_id']))
-                        insert_scan_run(scan['id'], scan_run['history_id'])
+                    """
+                    print ('Inserting scan run: ' + str(scan_run['history_id']))
+                    insert_scan_run(scan['id'], scan_run['history_id'])
     
 update_folders()
 update_scans()
