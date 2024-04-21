@@ -233,3 +233,10 @@ def update_scans():
     
 update_folders()
 update_scans()
+
+"""
+TODO: (before release to client endpoints)
+* Logging
+* LOTS of try catches and other error protection
+* Test output validity (can it be ingested)
+"""
