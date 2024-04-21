@@ -67,6 +67,13 @@ def current_date_folder_name():
     # Format date as YYYYMMDD
     return current_date.strftime('%Y%m%d')
 
+def calculate_severities(target):
+    sev_count = [0] * 5
+    for vuln in target.get('vulnerabilities', []):
+        if vuln.get('severity'):
+            sev_count[vuln['severity']] += vuln['count']
+    return sev_count
+
 def upload_data_to_s3(data, file_type):
     """Upload a file to an S3 bucket
 
@@ -77,12 +84,12 @@ def upload_data_to_s3(data, file_type):
     """
     file_name = f"{SYSTEM_ID}/{current_date_folder_name()}/{file_type}.json"
     # Upload the file
-    s3_client = boto3.client('s3')
     try:
         # Convert to json
         json_data = json.dumps(data)
         s3_client.put_object(Body=json_data, Bucket=aws_s3_bucket_name, Key=file_name)
     except ClientError as e:
+        print(e)
         return False
         # TODO: LOG THIS WITH DATADOG!!!
     return True
@@ -129,20 +136,20 @@ def format_vuln_outputs(vuln_output):
     outputs = []
     for output in vuln_output:
         for port in output['ports'].keys():
-            outputs.insert({'port': port, 'output': output['plugin_output']})
+            outputs.append({'port': port, 'output': output['plugin_output']})
     return outputs
 
-def format_host_vuln(scan_id, host_id, plugin_id, history_id, cursor):
+def format_host_vuln(scan_id, host_id, plugin_id, history_id):
     # Need to insert plugin first to have FK relationship
     # Get vuln output which includes plugin info
     vuln_output = get_plugin_output(scan_id, host_id, plugin_id, history_id)
-    plugin = format_plugin(vuln_output['info']['plugindescription'], plugin_id)
+    plugin = format_plugin(vuln_output['info']['plugindescription'])
 
     # Insert host vuln
     host_vuln = {'nessus_host_id': host_id, 'scan_run_id': history_id, 'plugin_id': plugin_id}
     # Finally format vuln output and upload
     outputs = format_vuln_outputs(vuln_output['outputs'])
-    return {'plugin': plugin, 'host_vuln': host_vuln, outputs: 'outputs'}
+    return {'plugin': plugin, 'host_vuln': host_vuln, 'outputs': outputs}
 
 def format_host(scan_id, host_id, history_id):
     # Get host vulnerabilities for a scan run
@@ -150,9 +157,7 @@ def format_host(scan_id, host_id, history_id):
 
     # Count number of vulns of each severity for this host in this scan run
     # 0 is informational, 4 is critical
-    sev_count = [0] * 5
-    for vuln in host['vulnerabilities']:
-        sev_count[vuln['severity']] += vuln['count']
+    sev_count = calculate_severities(host)
 
     host['host_id'] = host_id
     host['history_id'] = history_id
@@ -175,16 +180,14 @@ def insert_scan_run(scan_id, history_id):
 
     # Count number of vulns of each severity for this scan run
     # 0 is informational, 4 is critical
-    sev_count = [0] * 5
-    for vuln in scan_run['vulnerabilities']:
-        sev_count[vuln['severity']] += vuln['count']
+    sev_count = calculate_severities(scan_run)
 
     scan_summary = {
         'history_id': history_id,
         'scan_id': scan_id,
-        'scanner_start': scan_run['info']['scanner_start'],
-        'scanner_end': scan_run['info']['scanner_end'],
-        'targets': scan_run['info']['targets'],
+        'scanner_start': scan_run['info']['scan_start'],
+        'scanner_end': scan_run['info']['scan_end'],
+        'targets': scan_run['hosts'],
         'host_count': scan_run['info']['hostcount'],
         'critical_count': sev_count[4],
         'high_count': sev_count[3],
@@ -197,9 +200,7 @@ def insert_scan_run(scan_id, history_id):
     for i in range(len(scan_run['hosts'])):
         scan_run['hosts'][i] = format_host(scan_id, scan_run['hosts'][i]['host_id'], history_id)
 
-    upload_data_to_s3(scan_summary, 'scan_run')
-
-    
+    upload_data_to_s3(scan_summary, f"scan_run_{scan_id}_{history_id}")
 
 def update_scans():
     scans = get_scans()
