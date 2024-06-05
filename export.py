@@ -8,6 +8,7 @@ import boto3
 from botocore.exceptions import ClientError
 import datadog
 import json
+import time
 from datetime import datetime
 import uuid
 import hashlib
@@ -21,15 +22,24 @@ config.read(os.path.join(os.path.dirname(__file__), 'config.ini'))
 # Nessus config vars
 nessus_hostname = config.get('nessus','hostname')
 nessus_port = config.get('nessus','port')
-access_key = 'accessKey=' + config.get('nessus','access_key') + ';'
-secret_key = 'secretKey=' + config.get('nessus','secret_key') + ';'
+nessus_access_key = config.get('nessus','access_key')
+nessus_secret_key = config.get('nessus','secret_key')
+access_key = 'accessKey=' + nessus_access_key + ';'
+secret_key = 'secretKey=' + nessus_secret_key + ';'
 base = 'https://{hostname}:{port}'.format(hostname=nessus_hostname, port=nessus_port)
-trash = config.getboolean('nessus','trash')
 # AWS config vars
 aws_nessus_scanner_user_id = config.get('aws', 'aws_nessus_scanner_user_id')
 aws_nessus_scanner_user_secret = config.get('aws', 'aws_nessus_scanner_user_secret')
 aws_region = config.get('aws', 'aws_region')
 aws_s3_bucket_name = config.get('aws', 'aws_s3_bucket_name')
+# Scanner config vars
+deployment_id = config.get('scanner', 'deployment_id')
+
+# Check for missing config vars
+if not all([nessus_hostname, nessus_port, nessus_access_key, nessus_secret_key, 
+            aws_nessus_scanner_user_id, aws_nessus_scanner_user_secret, 
+            aws_region, aws_s3_bucket_name, deployment_id]):
+    raise ValueError("Missing one or more config vars.")
 
 # Nessus endpoints
 FOLDERS = '/folders'
@@ -45,15 +55,10 @@ PLUGIN_OUTPUT = PLUGIN_ID + '?history_id={history_id}'
 
 # ---Functions---
 # Utils
-def get_unique_system_id():
-    # Get the MAC address
-    mac = uuid.getnode()
-    # Convert MAC address to a consistent format
-    mac_string = ':'.join(('%012X' % mac)[i:i+2] for i in range(0, 12, 2))
-    # Hash the MAC address to get a unique, consistent ID
-    unique_id = hashlib.sha256(mac_string.encode()).hexdigest()
-    return unique_id
-SYSTEM_ID = get_unique_system_id()
+def is_less_than_a_year_ago(epoch_timestamp):
+    current_time = time.time()
+    one_year_seconds = 365 * 24 * 60 * 60
+    return current_time - epoch_timestamp < one_year_seconds
 # S3 Functions
 s3_client = boto3.client(
     's3',
@@ -82,7 +87,7 @@ def upload_data_to_s3(data, file_type):
     :param object_name: S3 object name. If not specified then file_name is used
     :return: True if file was uploaded, else False
     """
-    file_name = f"{SYSTEM_ID}/{current_date_folder_name()}/{file_type}.json"
+    file_name = f"{deployment_id}/{current_date_folder_name()}/{file_type}.json"
     # Upload the file
     try:
         # Convert to json
@@ -216,7 +221,7 @@ def update_scans():
             # Check each run of each scan
             for scan_run in scan_details['history']:
                 # Only import if scan finished completely
-                if scan_run['status'] == 'completed':
+                if scan_run['status'] == 'completed' and is_less_than_a_year_ago(scan_run['last_modification_date']):
                     """
                     # TODO: We probably wanna add this back in once we get rolling
                     result = None
