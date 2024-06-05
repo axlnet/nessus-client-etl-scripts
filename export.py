@@ -8,6 +8,7 @@ import boto3
 from botocore.exceptions import ClientError
 import datadog
 import json
+import time
 from datetime import datetime
 import uuid
 import hashlib
@@ -53,6 +54,11 @@ HOST_VULN = HOST_ID + '?history_id={history_id}'
 PLUGIN_OUTPUT = PLUGIN_ID + '?history_id={history_id}'
 
 # ---Functions---
+# Utils
+def is_less_than_a_year_ago(epoch_timestamp):
+    current_time = time.time()
+    one_year_seconds = 365 * 24 * 60 * 60
+    return current_time - epoch_timestamp < one_year_seconds
 # S3 Functions
 s3_client = boto3.client(
     's3',
@@ -215,7 +221,7 @@ def update_scans():
             # Check each run of each scan
             for scan_run in scan_details['history']:
                 # Only import if scan finished completely
-                if scan_run['status'] == 'completed':
+                if scan_run['status'] == 'completed' and is_less_than_a_year_ago(scan_run['last_modification_date']):
                     """
                     # TODO: We probably wanna add this back in once we get rolling
                     result = None
