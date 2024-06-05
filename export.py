@@ -72,7 +72,6 @@ s3_client = boto3.client(
 )
 
 def get_latest_folder():
-    s3_client = boto3.client('s3')
     paginator = s3_client.get_paginator('list_objects_v2')
     
     folder_dates = []
