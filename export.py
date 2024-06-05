@@ -2,16 +2,12 @@
 import configparser
 import requests
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
-import pymysql.cursors
 import os
 import boto3
 from botocore.exceptions import ClientError
 import datadog
 import json
-import time
 from datetime import datetime
-import uuid
-import hashlib
 
 # Disable SSL warnings
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
@@ -55,18 +51,6 @@ PLUGIN_OUTPUT = PLUGIN_ID + '?history_id={history_id}'
 
 # ---Functions---
 # Utils
-def is_less_than_a_year_ago(epoch_timestamp):
-    current_time = time.time()
-    one_year_seconds = 365 * 24 * 60 * 60
-    return current_time - epoch_timestamp < one_year_seconds
-# S3 Functions
-s3_client = boto3.client(
-    's3',
-    aws_access_key_id=aws_nessus_scanner_user_id,
-    aws_secret_access_key=aws_nessus_scanner_user_secret,
-    region_name=aws_region
-)
-
 def current_date_folder_name():
     current_date = datetime.now()
     # Format date as YYYYMMDD
@@ -78,6 +62,29 @@ def calculate_severities(target):
         if vuln.get('severity'):
             sev_count[vuln['severity']] += vuln['count']
     return sev_count
+
+# S3 functions
+s3_client = boto3.client(
+    's3',
+    aws_access_key_id=aws_nessus_scanner_user_id,
+    aws_secret_access_key=aws_nessus_scanner_user_secret,
+    region_name=aws_region
+)
+
+def get_latest_folder():
+    s3_client = boto3.client('s3')
+    paginator = s3_client.get_paginator('list_objects_v2')
+    
+    folder_dates = []
+    # Pagination
+    for page in paginator.paginate(Bucket=aws_s3_bucket_name, Prefix=f"{deployment_id}/"):
+        folder_dates.extend([
+            datetime.strptime(obj['Key'].split('/')[1], '%Y%m%d')
+            for obj in page.get('Contents', [])
+            if len(obj['Key'].split('/')) > 1 and obj['Key'].split('/')[1].isdigit() and len(obj['Key'].split('/')[1]) == 8
+        ])
+    # Newest folder in bucket OR from the start of epoch time
+    return max(folder_dates) if folder_dates else datetime(1970, 1, 1)
 
 def upload_data_to_s3(data, file_type):
     """Upload a file to an S3 bucket
@@ -207,6 +214,9 @@ def insert_scan_run(scan_id, history_id):
 
     upload_data_to_s3(scan_summary, f"scan_run_{scan_id}_{history_id}")
 
+latest_folder_date = get_latest_folder().date()
+print(f"Pulling all scans since {latest_folder_date}")
+
 def update_scans():
     scans = get_scans()
     upload_data_to_s3(scans, 'scan')
@@ -221,21 +231,10 @@ def update_scans():
             # Check each run of each scan
             for scan_run in scan_details['history']:
                 # Only import if scan finished completely
-                if scan_run['status'] == 'completed' and is_less_than_a_year_ago(scan_run['last_modification_date']):
-                    """
-                    # TODO: We probably wanna add this back in once we get rolling
-                    result = None
-                    with connection.cursor() as cursor:    
-                        sql = "SELECT * FROM `scan_run` WHERE `scan_run_id` = %s"
-                        cursor.execute(sql, (scan_run['history_id']))
-                        result = cursor.fetchone()
-
-                    # If scan run hasn't yet been inserted
-                    if result == None:
-                    """
+                if scan_run['status'] == 'completed' and datetime.fromtimestamp(scan_run['last_modification_date']).date() >= latest_folder_date:
                     print ('Inserting scan run: ' + str(scan_run['history_id']))
                     insert_scan_run(scan['id'], scan_run['history_id'])
-    
+
 update_folders()
 update_scans()
 
