@@ -185,7 +185,7 @@ def format_host(scan_id, host_id, history_id):
     # Format host vulnerabilities
     for i in range(len(host['vulnerabilities'])):
         host['vulnerabilities'][i] = format_host_vuln(scan_id, host_id, host['vulnerabilities'][i]['plugin_id'], history_id)
-        print(f"            {len(host['vulnerabilities'])} vulnerabilities pulled and formatted")
+    print(f"            {len(host['vulnerabilities'])} vulnerabilities pulled and formatted")
     
     return host
 
