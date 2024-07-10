@@ -157,7 +157,6 @@ def format_host_vuln(scan_id, host_id, plugin_id, history_id):
     # Get vuln output which includes plugin info
     vuln_output = get_plugin_output(scan_id, host_id, plugin_id, history_id)
     plugin = format_plugin(vuln_output['info']['plugindescription'])
-    print("    Plugin and plugin output pulled from Nessus")
 
     # Insert host vuln
     host_vuln = {'nessus_host_id': host_id, 'scan_run_id': history_id, 'plugin_id': plugin_id}
@@ -168,7 +167,7 @@ def format_host_vuln(scan_id, host_id, plugin_id, history_id):
 def format_host(scan_id, host_id, history_id):
     # Get host vulnerabilities for a scan run
     host = get_host_vuln(scan_id, host_id, history_id) 
-    print("    Host vulnerabilities pulled")
+    print("        Host vulnerabilities pulled")
 
     # Count number of vulns of each severity for this host in this scan run
     # 0 is informational, 4 is critical
@@ -186,6 +185,7 @@ def format_host(scan_id, host_id, history_id):
     # Format host vulnerabilities
     for i in range(len(host['vulnerabilities'])):
         host['vulnerabilities'][i] = format_host_vuln(scan_id, host_id, host['vulnerabilities'][i]['plugin_id'], history_id)
+        print(f"            {len(host['vulnerabilities'])} vulnerabilities pulled and formatted")
     
     return host
 
