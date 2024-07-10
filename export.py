@@ -2,6 +2,7 @@
 import configparser
 import requests
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
+from concurrent.futures import ThreadPoolExecutor
 import os
 import boto3
 from botocore.exceptions import ClientError
@@ -98,8 +99,9 @@ def upload_data_to_s3(data, file_type):
     try:
         # Convert to json
         json_data = json.dumps(data)
-        s3_client.put_object(Body=json_data, Bucket=aws_s3_bucket_name, Key=file_name)
-    except ClientError as e:
+        with ThreadPoolExecutor() as executor:
+            executor.submit(s3_client.put_object, Body=json_data, Bucket=aws_s3_bucket_name, Key=file_name)
+    except Exception as e:
         print(e)
         return False
         # TODO: LOG THIS WITH DATADOG!!!
