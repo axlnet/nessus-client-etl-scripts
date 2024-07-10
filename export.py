@@ -157,6 +157,7 @@ def format_host_vuln(scan_id, host_id, plugin_id, history_id):
     # Get vuln output which includes plugin info
     vuln_output = get_plugin_output(scan_id, host_id, plugin_id, history_id)
     plugin = format_plugin(vuln_output['info']['plugindescription'])
+    print("    Plugin and plugin output pulled from Nessus")
 
     # Insert host vuln
     host_vuln = {'nessus_host_id': host_id, 'scan_run_id': history_id, 'plugin_id': plugin_id}
@@ -167,6 +168,7 @@ def format_host_vuln(scan_id, host_id, plugin_id, history_id):
 def format_host(scan_id, host_id, history_id):
     # Get host vulnerabilities for a scan run
     host = get_host_vuln(scan_id, host_id, history_id) 
+    print("    Host vulnerabilities pulled")
 
     # Count number of vulns of each severity for this host in this scan run
     # 0 is informational, 4 is critical
@@ -190,7 +192,7 @@ def format_host(scan_id, host_id, history_id):
 def insert_scan_run(scan_id, history_id):
     # Get scan runs for a scan
     scan_run = get_scan_run(scan_id, history_id)
-
+    print("    Scan run pulled from Nessus")
     # Count number of vulns of each severity for this scan run
     # 0 is informational, 4 is critical
     sev_count = calculate_severities(scan_run)
@@ -212,8 +214,10 @@ def insert_scan_run(scan_id, history_id):
     # Format hosts in scan run
     for i in range(len(scan_run['hosts'])):
         scan_run['hosts'][i] = format_host(scan_id, scan_run['hosts'][i]['host_id'], history_id)
+        print("    Hosts formatted")
 
     upload_data_to_s3(scan_summary, f"scan_run_{scan_id}_{history_id}")
+    print("    Data uploaded to S3")
 
 latest_folder_date = get_latest_folder().date()
 print(f"Pulling all scans since {latest_folder_date}")
