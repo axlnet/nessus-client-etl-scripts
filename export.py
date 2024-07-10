@@ -183,8 +183,8 @@ def format_host(scan_id, host_id, history_id):
     host['info_count'] = sev_count[0]
 
     # Format host vulnerabilities
-    for i in range(len(host['vulnerabilities'])):
-        host['vulnerabilities'][i] = format_host_vuln(scan_id, host_id, host['vulnerabilities'][i]['plugin_id'], history_id)
+    with ThreadPoolExecutor() as executor:
+        host['vulnerabilities'] = list(executor.map(lambda vuln: format_host_vuln(scan_id, host_id, vuln['plugin_id'], history_id), host['vulnerabilities']))
     print(f"            {len(host['vulnerabilities'])} vulnerabilities pulled and formatted")
     
     return host
