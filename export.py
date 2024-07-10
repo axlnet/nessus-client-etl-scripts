@@ -185,7 +185,7 @@ def format_host(scan_id, host_id, history_id):
     # Format host vulnerabilities
     with ThreadPoolExecutor() as executor:
         host['vulnerabilities'] = list(executor.map(lambda vuln: format_host_vuln(scan_id, host_id, vuln['plugin_id'], history_id), host['vulnerabilities']))
-    print(f"            {len(host['vulnerabilities'])} vulnerabilities pulled and formatted")
+    print(f"            {len(host['vulnerabilities'])} vulnerabilities' plugins pulled and formatted")
     
     return host
 
