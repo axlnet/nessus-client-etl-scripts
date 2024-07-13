@@ -39,16 +39,7 @@ if not all([nessus_hostname, nessus_port, nessus_access_key, nessus_secret_key,
     raise ValueError("Missing one or more config vars.")
 
 # Nessus endpoints
-FOLDERS = '/folders'
 SCANS = '/scans'
-
-SCAN_ID = SCANS + '/{scan_id}'
-HOST_ID = SCAN_ID + '/hosts/{host_id}'
-PLUGIN_ID = HOST_ID + '/plugins/{plugin_id}'
-
-SCAN_RUN = SCAN_ID + '?history_id={history_id}'
-HOST_VULN = HOST_ID + '?history_id={history_id}'
-PLUGIN_OUTPUT = PLUGIN_ID + '?history_id={history_id}'
 
 # ---Functions---
 # Utils
@@ -68,25 +59,22 @@ def request(url):
     response = requests.get(url=url, headers=headers, verify=False)
     return response.json()
 
-def get_folders():
-    return request(FOLDERS)
-
 def get_scans():
     return request(SCANS)
 
+existing_scans = set()
+
 def count_existing_scans():
     paginator = s3_client.get_paginator('list_objects_v2')
-    existing_scans = set()
     
     # Iterate through each date folder within the deployment_id folder
     for page in paginator.paginate(Bucket=aws_s3_bucket_name, Prefix=f"{deployment_id}/"):
         for obj in page.get('Contents', []):
             key_parts = obj['Key'].split('/')
             # Check if the key corresponds to a file within a date-named folder
-            if len(key_parts) > 2 and key_parts[1].isdigit() and len(key_parts[1]) == 8:
-                if key_parts[2].startswith('scan_run_'):
-                    scan_id = key_parts[2].split('_')[2]
-                    existing_scans.add(scan_id)
+            if key_parts[2].startswith('scan_run_'):
+                scan_id = key_parts[2].split('_')[2]
+                existing_scans.add(scan_id)
     return existing_scans
 
 def count_scans():
@@ -100,8 +88,9 @@ def count_scans():
         total_scans += 1
         if scan['id'] not in existing_scans:
             new_scans_count += 1
-            print('New scan to import: ' + str(scan['id']))
 
+    print(f"All scans: {scans}")
+    print(f"Existing scans: {existing_scans}")
     print(f"Total scans found: {total_scans}")
     print(f"Scans left to import: {new_scans_count}")
 
