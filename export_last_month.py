@@ -8,7 +8,7 @@ import boto3
 from botocore.exceptions import ClientError
 import datadog
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Disable SSL warnings
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
@@ -205,32 +205,29 @@ def insert_scan_run(scan_id, history_id):
     upload_data_to_s3(scan_summary, f"scan_run_{scan_id}_{history_id}")
     print("    Data uploaded to S3")
 
-def get_existing_scan_runs():
-    paginator = s3_client.get_paginator('list_objects_v2')
-    existing_scan_runs = set()
-    for page in paginator.paginate(Bucket=aws_s3_bucket_name, Prefix=f"{deployment_id}/"):
-        for obj in page.get('Contents', []):
-            key_parts = obj['Key'].split('/')
-            if len(key_parts) > 2 and key_parts[2].startswith('scan_run_'):
-                existing_scan_runs.add(key_parts[2])
-    return existing_scan_runs
+one_month_ago = datetime.now() - timedelta(days=30)
+print(f"Pulling all scans since {one_month_ago}")
 
-def update_scan_runs():
-    existing_scan_runs = get_existing_scan_runs()
+def update_scans():
     scans = get_scans()
+    upload_data_to_s3(scans, 'scan')
 
     for scan in scans['scans']:
-        print('Processing: ' + scan['name'])
+        print ('Processing: ' + scan['name'])
+        
+        # Retreive details about the current scan
         scan_details = get_scan(scan['id'])
 
-        if scan_details['history'] is not None:
+        if scan_details['history'] != None:
+            # Check each run of each scan
             for scan_run in scan_details['history']:
-                scan_run_file = f"scan_run_{scan['id']}_{scan_run['history_id']}.json"
-                if (scan_run['status'] == 'completed' and scan_run_file not in existing_scan_runs):
-                    print('Inserting scan run: ' + str(scan_run['history_id']))
+                # Only import if scan finished completely
+                if scan_run['status'] == 'completed' and datetime.fromtimestamp(scan_run['last_modification_date']).date() >= one_month_ago.date():
+                    print ('Inserting scan run: ' + str(scan_run['history_id']))
                     insert_scan_run(scan['id'], scan_run['history_id'])
 
-update_scan_runs()
+update_folders()
+update_scans()
 
 """
 TODO: (before release to client endpoints)

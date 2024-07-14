@@ -89,8 +89,6 @@ def count_scans():
         if scan['id'] not in existing_scans:
             new_scans_count += 1
 
-    print(f"All scans: {scans}")
-    print(f"Existing scans: {existing_scans}")
     print(f"Total scans found: {total_scans}")
     print(f"Scans left to import: {new_scans_count}")
 
