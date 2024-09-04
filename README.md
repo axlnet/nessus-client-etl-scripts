@@ -1,44 +1,25 @@
-# Nessus Professional Database Export
-A script to export Nessus results regularly into a MySQL database for easy analysis/aggregation.
-
-## Use Cases
-* Find occurences of a specific vulnerability across your scans (e.g. in a folder) without having to export all of them to CSV.
-* Search for text in plugin outputs across all your scans.
-* Quickly see trending stats across scan runs (summary stats are calculated at export time and saved in the DB).
-* Build a web app front end to present a subset of results for customers.
-
-Some usage examples here: https://eddiez.me/nessus-db-export/
-
-## Prerequisites
-* Nessus Professional
-* MySQL database
+# Axl.net Internal Nessus Scanner ETL Tool
+A script to export Nessus results regularly into an AWS bucket for easy analysis/aggregation.
 
 ## Install
-1. git clone https://github.com/eddiez9/nessus-database-export
-2. pip3 install -r requirements.txt
+1. Use [this document](https://docs.google.com/spreadsheets/d/1DiAgFYb_Y1e50SUAb-VvOQoyF5z0Mvwa0k6QXUU7srs/edit?gid=1161236586#gid=1161236586) to keep track of clients' internal Nessus scanners
+2. Ssh into the desired scanner
+3. `nano install.sh`
+4. Paste in the contents of `install.sh` in this repo
+5. Fill in the following parameters in the script:
+    * ACCESS_KEY=""
+    * SECRET_KEY=""
+    * AWS_USER_ID=""
+    * AWS_USER_SECRET=""
+>AWS_USER_ID and SECRET can be found in the prod account. ACCESS_KEY and SECRET_KEY are specific to that Nessus installation. Nessus API access credentials must be made from that machine's GUI.
+6. `sudo bash install.sh`
+7. The script should print a uuid at some point (ex: dddb0f5c-0caa-449d-9ddf-6bf50ddd45cd). Copy it and use it to create a new row in the `nessusdb2.scaner_deployments` table.
 
-## Configuration
-1. Instantiate database schema (see schema.sql file for import)
+| scaner_deployment_id | client_id | Location            | deployment_uuid                      | scanner_type | hardware |
+|----------------------|-----------|---------------------|--------------------------------------|--------------|----------|
+|                  Eg. |       Eg. | From above document | dddb0f5c-0caa-449d-9ddf-6bf50ddd45cd | internal     | From doc |
 
-    e.g. at the mysql command line
-    mysql> source \home\user\Desktop\schema.sql;
-2. Copy config.ini.example to config.ini and fill in all fields
-
-## Usage
-Install in crontab for scheduled exports or run manually by just calling the script with no arguments:
-```
-$ python3 export.py
-Processing: REDACTED
-Inserting scan run: 69
-Inserting scan run: 81
-Processing: REDACTED
-Processing: REDACTED
-Inserting scan run: 87
-```
-Once the export is completed you can run whatever queries you want. e.g.:
-
-<img src="https://i.imgur.com/fehc7j3.png">
-
-### TODO
-* Check API output for compliance scans and add code to pull in compliance scans
-* Use trash flag to not pull in scans in the trash
+# Usage
+From the root directory of the repo (try `/opt/nessus-client-etl-scripts/` or `/opt/scheduled-tasks/nessus-client-etl-scripts/`):
+1. `source .venv/bin/activate`
+2. `python3 export.py`
