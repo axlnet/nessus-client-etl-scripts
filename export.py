@@ -219,7 +219,7 @@ latest_folder_date = get_latest_folder().date()
 print(f"Pulling all scans since {latest_folder_date}")
 
 def update_scans():
-    scan_runs_exist = False
+    new_scan_runs_exist = False
     scans = get_scans()
 
     for scan in scans['scans']:
@@ -235,20 +235,13 @@ def update_scans():
                 if scan_run['status'] == 'completed' and datetime.fromtimestamp(scan_run['last_modification_date']).date() >= latest_folder_date:
                     print ('Inserting scan run: ' + str(scan_run['history_id']))
                     insert_scan_run(scan['id'], scan_run['history_id'])
-                    scan_runs_exist = True
+                    new_scan_runs_exist = True
     
-    if scan_runs_exist:
+    if new_scan_runs_exist:
         folders = get_folders()
         upload_data_to_s3(folders, 'folder')
         upload_data_to_s3(scans, 'scan')
-
-
+    else:
+        print("No new scan runs to upload.")
 
 update_scans()
-
-"""
-TODO: (before release to client endpoints)
-* Logging
-* LOTS of try catches and other error protection
-* Test output validity (can it be ingested)
-"""
