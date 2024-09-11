@@ -133,10 +133,6 @@ def get_plugin_output(scan_id, host_id, plugin_id, history_id):
     return request(PLUGIN_OUTPUT.format(scan_id=scan_id, host_id=host_id, plugin_id=plugin_id, history_id=history_id))
 
 # Nessus export functions
-def update_folders():
-    folders = get_folders()
-    upload_data_to_s3(folders, 'folder')
-
 def format_plugin(plugin):
     # Split references array into string delimited by new line
     reference = None
@@ -223,8 +219,8 @@ latest_folder_date = get_latest_folder().date()
 print(f"Pulling all scans since {latest_folder_date}")
 
 def update_scans():
+    scan_runs_exist = False
     scans = get_scans()
-    upload_data_to_s3(scans, 'scan')
 
     for scan in scans['scans']:
         print ('Processing: ' + scan['name'])
@@ -239,8 +235,15 @@ def update_scans():
                 if scan_run['status'] == 'completed' and datetime.fromtimestamp(scan_run['last_modification_date']).date() >= latest_folder_date:
                     print ('Inserting scan run: ' + str(scan_run['history_id']))
                     insert_scan_run(scan['id'], scan_run['history_id'])
+                    scan_runs_exist = True
+    
+    if scan_runs_exist:
+        folders = get_folders()
+        upload_data_to_s3(folders, 'folder')
+        upload_data_to_s3(scans, 'scan')
 
-update_folders()
+
+
 update_scans()
 
 """
